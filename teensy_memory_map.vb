@@ -1,5 +1,7 @@
 ﻿Imports System.IO
 
+Imports System.Reflection
+
 ''' <summary>
 ''' ----------------------------------------------------------------------------------------------------------------------------------------------
 ''' Author        : Joe Churchwell
@@ -37,6 +39,8 @@ Module teensy_memory_map
 
         Dim listOut As New List(Of String)
 
+        Dim myAssem As Assembly = Assembly.GetCallingAssembly()
+
         ' Constants
 
         ' ARGUMENT SWITCH CONSTRUCT IDENTIFIERS
@@ -55,76 +59,123 @@ Module teensy_memory_map
         Const OUTPUT_TAB_SPACING As UInt16 = 64
         Const NUMBER_OF_FIELDS As UInt16 = OBJECT_NAME_NUM ' Set this to the last element number
 
-        ' Loop through all the command line arguments
-        For Each iStr In cmdArgs
+        Const OUTPUT_CHAR_STRING As String = "---------------------------------------------------------------------------"
 
-            ' Check to see if it is an argument we need to be able to process the map file
-            If iStr.Contains(PATH_ID) Then
-                output_path = Replace(iStr, PATH_ID, "")
-            ElseIf iStr.Contains(FILE_ID) Then
-                output_file = Replace(iStr, FILE_ID, "")
-            End If
+        Try ' Perform some error checking to make sure we are okay and try to still perform the loading for Teensy
 
-            ' We also need to build a string for the "REAL_teensy_post_compile.exe" application
-            buildArgString += """" & iStr & """" & " "
+            ' Print out some form of header
+            Console.Write(OUTPUT_CHAR_STRING & vbLf)
+            Console.Write("                             MEMORY MAP OUTPUT                             " & vbLf)
+            Dim strVerion As String = "Version " & myAssem.GetName.Version.ToString
+            Console.Write(StrDup(CInt((OUTPUT_CHAR_STRING.Length - strVerion.Length) / 2), " "))
+            Console.Write(strVerion)
+            Console.Write(StrDup(CInt((OUTPUT_CHAR_STRING.Length - strVerion.Length) / 2), " ") & vbLf)
+            Console.Write(OUTPUT_CHAR_STRING & vbLf)
 
-        Next
+            ' Loop through all the command line arguments
+            For Each iStr In cmdArgs
 
-        ' Check to see we have found a file and path for the *.elf file so we can continue to process
-        If output_file <> "" And output_path <> "" Then
-
-            ' Run avr-objdump with '-t' followed by elf file name to generate the map file
-            shell_output = "cmd /c avr-objdump.exe -t " & output_path & "\" & output_file & ".elf" & " > " & output_path & "\" & output_file & ".map"
-            Shell(shell_output, vbMaximizedFocus, True)
-
-            ' Read in all the data that was output by avr-objdump.exe
-            fileRead = My.Computer.FileSystem.ReadAllText(output_path & "\" & output_file & ".map")
-
-            ' Split the file contents into an array of lines to process wach line
-            arrLines = Split(fileRead, vbCrLf)
-
-            ' Loop through all the lines and expose specific fields
-            For Each iLine In arrLines
-
-                ' First replace any tabs with spaces to create a common delimiter
-                iLine = Replace(iLine, vbTab, " ")
-
-                ' Separate the line into specific fields
-                strFields = SplitMultiDelims(iLine, " ", True)
-
-                ' Make sure we can process the fields
-                If UBound(strFields) > NUMBER_OF_FIELDS - 1 Then
-                    ' Look for variables that were created in our application
-                    If strFields(GLOBAL_G_FIELD_NUM) = GLOBAL_G_FIELD_DESIGNATOR AndAlso strFields(OBJECT_O_FIELD_NUM) = OBJECT_O_FIELD_DESIGNATOR Then
-                        ' Output the information we care about to the Arduino output window
-                        tmpBytes = Convert.ToUInt32(strFields(OBJECT_BYTE_COUNT_NUM), 16)
-                        listOut.Add(strFields(OBJECT_NAME_NUM) & StrDup(OUTPUT_TAB_SPACING - strFields(OBJECT_NAME_NUM).Length, " ") & Mid(strFields(ADDRESS_FIELD_NUM), 1, 4) & ":" & Mid(strFields(ADDRESS_FIELD_NUM), 5) & StrDup(16 - tmpBytes.ToString.Length, " ") & tmpBytes)
-                        'Console.Write(strFields(OBJECT_NAME_NUM) & StrDup(OUTPUT_TAB_SPACING - strFields(OBJECT_NAME_NUM).Length, " ") & Mid(strFields(ADDRESS_FIELD_NUM), 1, 4) & ":" & Mid(strFields(ADDRESS_FIELD_NUM), 5) & StrDup(16 - tmpBytes.ToString.Length, " ") & tmpBytes & vbLf)
-                    End If
+                ' Check to see if it is an argument we need to be able to process the map file
+                If iStr.Contains(PATH_ID) Then
+                    output_path = Replace(iStr, PATH_ID, "")
+                ElseIf iStr.Contains(FILE_ID) Then
+                    output_file = Replace(iStr, FILE_ID, "")
                 End If
 
+                ' We also need to build a string for the "REAL_teensy_post_compile.exe" application
+                buildArgString += """" & iStr & """" & " "
+
             Next
 
-            listOut.Sort()
+            ' Check to see we have found a file and path for the *.elf file so we can continue to process
+            If output_file <> "" And output_path <> "" Then
 
-            For Each istr In listOut
-                Console.Write(istr & vbLf)
-            Next
+                ' Run avr-objdump with '-t' followed by elf file name to generate the map file
+                'shell_output = "cmd /c avr-objdump.exe -t " & output_path & "\" & output_file & ".elf" & " > " & output_path & "\" & output_file & ".map"
 
-        End If
+                ' Search for the objdump.exe in the folders and sub-folders contained where this exe is located
+                Dim tmpList As List(Of String) = GetFilesRecursive(System.AppDomain.CurrentDomain.BaseDirectory, "objdump.exe")
+                Dim selectedFilePath As String = "" ' This is the objdump.exe to use for the map file generation
+                ' Print out the number of objdump.exe executables we have found as well as the current application directory
+                Console.Write("The Map Generator Tool Found = " & tmpList.Count() & " matching executables in " & System.AppDomain.CurrentDomain.BaseDirectory & vbLf)
+                ' Print out the specific files that were found and determine which file is best suited for this application (ARM is preferred)
+                For Each ioStr As String In tmpList
+                    Console.Write(ioStr & vbLf)
+                    If selectedFilePath = "" Then selectedFilePath = ioStr ' Make sure we at least have something
+                    ' If we found an ARM version then use it!
+                    If ioStr.Contains("arm") Then
+                        selectedFilePath = ioStr
+                    End If
+                Next
 
-        ' Check if there is a hex file and display the CRC32 value
-        Console.Write("***************** CRC CALCULATIONS *******************" & vbLf)
-        If My.Computer.FileSystem.FileExists(output_path & "\" & output_file & ".elf") Then
-            Console.Write(vbTab & "ELF CRC = " & GetCRC32(output_path & "\" & output_file & ".elf") & vbLf)
-        End If
-        If My.Computer.FileSystem.FileExists(output_path & "\" & output_file & ".hex") Then
-            Console.Write(vbTab & "HEX CRC = " & GetCRC32(output_path & "\" & output_file & ".hex") & vbLf)
-        End If
-        If My.Computer.FileSystem.FileExists(output_path & "\" & output_file & ".map") Then
-            Console.Write(vbTab & "MAP CRC = " & GetCRC32(output_path & "\" & output_file & ".map") & vbLf)
-        End If
-        Console.Write("**************** END CRC CALCULATIONS ****************" & vbLf)
+                ' Make sure we found an objdump exe to use
+                If selectedFilePath <> "" Then
+
+                    Console.Write("MEMORY MAP GEN USING " & selectedFilePath & vbLf)
+
+                    shell_output = "cmd /c """ & selectedFilePath & """ -t " & output_path & "\" & output_file & ".elf" & " > " & output_path & "\" & output_file & ".map"
+                    Shell(shell_output, vbMaximizedFocus, True)
+
+                    ' Read in all the data that was output by avr-objdump.exe
+                    fileRead = My.Computer.FileSystem.ReadAllText(output_path & "\" & output_file & ".map")
+
+                    ' Split the file contents into an array of lines to process wach line
+                    arrLines = Split(fileRead, vbCrLf)
+
+                    ' Loop through all the lines and expose specific fields
+                    For Each iLine In arrLines
+
+                        ' First replace any tabs with spaces to create a common delimiter
+                        iLine = Replace(iLine, vbTab, " ")
+
+                        ' Separate the line into specific fields
+                        strFields = SplitMultiDelims(iLine, " ", True)
+
+                        ' Make sure we can process the fields
+                        If UBound(strFields) > NUMBER_OF_FIELDS - 1 Then
+                            ' Look for variables that were created in our application
+                            If strFields(GLOBAL_G_FIELD_NUM) = GLOBAL_G_FIELD_DESIGNATOR AndAlso strFields(OBJECT_O_FIELD_NUM) = OBJECT_O_FIELD_DESIGNATOR Then
+                                ' Output the information we care about to the Arduino output window
+                                tmpBytes = Convert.ToUInt32(strFields(OBJECT_BYTE_COUNT_NUM), 16)
+                                listOut.Add(strFields(OBJECT_NAME_NUM) & StrDup(OUTPUT_TAB_SPACING - strFields(OBJECT_NAME_NUM).Length, " ") & Mid(strFields(ADDRESS_FIELD_NUM), 1, 4) & ":" & Mid(strFields(ADDRESS_FIELD_NUM), 5) & StrDup(16 - tmpBytes.ToString.Length, " ") & tmpBytes)
+                                'Console.Write(strFields(OBJECT_NAME_NUM) & StrDup(OUTPUT_TAB_SPACING - strFields(OBJECT_NAME_NUM).Length, " ") & Mid(strFields(ADDRESS_FIELD_NUM), 1, 4) & ":" & Mid(strFields(ADDRESS_FIELD_NUM), 5) & StrDup(16 - tmpBytes.ToString.Length, " ") & tmpBytes & vbLf)
+                            End If
+                        End If
+
+                    Next
+
+                    listOut.Sort() ' Sort the output
+
+                    ' Print it all out to the console
+                    For Each istr In listOut
+                        Console.Write(istr & vbLf)
+                    Next
+                Else ' Output an error that we could not find the objdump exe file
+                    Console.Error.Write(vbLf & "The objdump.exe file was not found! Please make sure this file is within the tools directory" & vbLf)
+                End If ' selectedFilePath
+            End If
+
+            ' Check if there is a hex file and display the CRC32 value
+            Console.Write("***************** CRC CALCULATIONS *******************" & vbLf)
+            If My.Computer.FileSystem.FileExists(output_path & "\" & output_file & ".elf") Then
+                Console.Write(vbTab & "ELF CRC = " & GetCRC32(output_path & "\" & output_file & ".elf") & vbLf)
+            End If
+            If My.Computer.FileSystem.FileExists(output_path & "\" & output_file & ".hex") Then
+                Console.Write(vbTab & "HEX CRC = " & GetCRC32(output_path & "\" & output_file & ".hex") & vbLf)
+            End If
+            If My.Computer.FileSystem.FileExists(output_path & "\" & output_file & ".map") Then
+                Console.Write(vbTab & "MAP CRC = " & GetCRC32(output_path & "\" & output_file & ".map") & vbLf)
+            End If
+            Console.Write("**************** END CRC CALCULATIONS ****************" & vbLf)
+
+            Console.Write("---------------------------------------------------------------------------" & vbLf)
+            Console.Write("                           END MEMORY MAP OUTPUT                           " & vbLf)
+            Console.Write("---------------------------------------------------------------------------" & vbLf)
+
+        Catch ex As Exception
+            Console.Error.Write(vbLf & "The Teensy Memory Map was not generated due to an error." & vbLf)
+            Console.Error.Write(vbLf & ex.Message & vbLf)
+        End Try
 
         ' Make sure to run the real teensy post compile utility
         Shell(TEENSY_POST_COMPILER & " " & buildArgString)
@@ -231,6 +282,30 @@ Module teensy_memory_map
         Catch ex As Exception
             Return ""
         End Try
+    End Function
+
+    ''' <summary>
+    '''     This will loop through all the directories within the current directory to try and find the objdump.exe
+    ''' </summary>
+    ''' <param name="path">This is the initial path to look in</param>
+    ''' <param name="criteria">Optional parameter to specifiy the file type to search for</param>
+    ''' <returns>Returns a list of all files that match the criteria (*.exe by default)</returns>
+    Private Function GetFilesRecursive(ByVal path As String, Optional criteria As String = "*.exe") As List(Of String)
+        Dim lstResult As New List(Of String)
+        Dim stkStack As New Stack(Of String)
+        stkStack.Push(path)
+        Do While (stkStack.Count > 0)
+            Dim strDirectory As String = stkStack.Pop
+            Try
+                lstResult.AddRange(Directory.GetFiles(strDirectory, criteria))
+                Dim strDirectoryName As String
+                For Each strDirectoryName In Directory.GetDirectories(strDirectory)
+                    stkStack.Push(strDirectoryName)
+                Next
+            Catch ex As Exception
+            End Try
+        Loop
+        Return lstResult
     End Function
 
 End Module
